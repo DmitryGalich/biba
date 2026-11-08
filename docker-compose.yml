@@ -10,20 +10,19 @@ services:
     restart: unless-stopped
     networks:
       - internal_network
+    depends_on:
+      - keycloak
 
   keycloak_db:
     image: postgres:16-alpine
     container_name: keycloak_db
     restart: unless-stopped
-
     environment:
       POSTGRES_DB: keycloak_db
       POSTGRES_USER: keycloak_db_user
       POSTGRES_PASSWORD: keycloak_db_password
-
     volumes:
       - keycloak_db_data:/var/lib/postgresql/data
-
     networks:
       - internal_network
 
@@ -49,7 +48,7 @@ services:
     depends_on:
       - keycloak_db
     volumes:
-      - ./keycloak_realms:/opt/keycloak/data/import:ro
+      - ./keycloak:/opt/keycloak/data/import:ro
 
 networks:
   internal_network:
