@@ -19,7 +19,7 @@ docker compose up --build -d
 docker compose down
 ```
 
-Reload nginx confing (run in nginx container):
+Reload nginx config (run in nginx container):
 ```
 nginx -s realod
 ```
