@@ -1,5 +1,6 @@
 # Biba
 
+[Technical Specification](ts/technical_specification.md)
 
 ## API
 
