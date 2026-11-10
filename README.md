@@ -19,15 +19,21 @@ docker compose up --build -d
 docker compose down
 ```
 
-Reload nginx confing (run in nginx container):
+Reload nginx config (run in nginx container):
 ```
 nginx -s realod
 ```
 
 Credentials:
 ```
-KC_DB_USERNAME: keycloak_db_user
-KC_DB_PASSWORD: keycloak_db_password
-KC_BOOTSTRAP_ADMIN_USERNAME: admin
-KC_BOOTSTRAP_ADMIN_PASSWORD: admin_password
+keycloak:    admin / admin_password
+
+keycloak_db: keycloak_db_user / keycloak_db_password
+
+realm:       biba_realm
+client:      biba_client
+user:        biba_user / biba_user_password
+email:       biba_user@example.com
+first name:  biba_first_name
+second name: biba_second_name
 ```
