@@ -2,6 +2,8 @@ import json
 import urllib.parse
 import urllib.request
 import sys
+import base64
+import time
 
 # --- CONFIGURATION ---
 GATEWAY_URL = "http://localhost"
@@ -19,7 +21,7 @@ TEST_FIRST = "biba_first_name"
 TEST_LAST = "biba_second_name"
 
 # Console Colors
-GREEN, RED, YELLOW, RESET = "\033[92m", "\033[91m", "\033[93m", "\033[0m"
+GREEN, RED, YELLOW, Cyan, RESET = "\033[92m", "\033[91m", "\033[93m", "\033[96m", "\033[0m"
 
 def api_request(url, method="GET", data=None, headers=None, is_json=False):
     req_data = None
@@ -106,7 +108,7 @@ def manage_user(headers):
     
     if status == 200 and isinstance(res, list) and len(res) > 0:
         print(f"{GREEN}OK (Exists){RESET}")
-        return res[0].get("id")
+        return res[0].get("id"), False
         
     print(f"{YELLOW}Not found. Creating user...{RESET} ", end="", flush=True)
     user_data = {"username": TEST_USER, "enabled": True, "email": TEST_EMAIL, "firstName": TEST_FIRST, "lastName": TEST_LAST}
@@ -122,7 +124,7 @@ def manage_user(headers):
         
         if pass_status == 204:
             print(f"{GREEN}User successfully created.{RESET}")
-            return user_id
+            return user_id, True
             
     print(f"{RED}FAIL. User creation failed (Status {status}).{RESET}")
     sys.exit(1)
@@ -135,12 +137,29 @@ def test_user_auth():
     
     if status == 200 and res and "access_token" in res:
         print(f"{GREEN}SUCCESS! Access Token obtained.{RESET}")
+        return res["access_token"]
     else:
         print(f"{RED}FAIL. Make sure 'Direct Access Grants' is enabled for client '{CLIENT}' (Status {status}).{RESET}")
         sys.exit(1)
 
+def decode_and_print_token(token):
+    print(f"8. Decoding JWT Token payload... ", end="", flush=True)
+    try:
+        payload_b64 = token.split('.')[1]
+        payload_b64 += '=' * (-len(payload_b64) % 4) # Fix padding
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode('utf-8'))
+        print(f"{GREEN}OK{RESET}")
+        
+        exp_time = payload.get("exp", 0) - int(time.time())
+        roles = payload.get("realm_access", {}).get("roles", [])
+        
+        print(f"   -> {Cyan}Token Expires In:{RESET} {exp_time} seconds")
+        print(f"   -> {Cyan}Authorized Roles:{RESET} {roles}")
+    except Exception as e:
+        print(f"{RED}FAIL. Could not parse token payload: {e}{RESET}")
+
 def check_database_status(headers):
-    print("8. Inspecting database status from Keycloak... ", end="", flush=True)
+    print("9. Inspecting database status from Keycloak... ", end="", flush=True)
     url = f"{KEYCLOAK_URL}/admin/serverinfo"
     status, res = api_request(url, method="GET", headers=headers)
     
@@ -149,6 +168,15 @@ def check_database_status(headers):
         print(f"{GREEN}OK (Keycloak is connected to {db_name} inside the Docker network){RESET}")
     else:
         print(f"{YELLOW}WARNING (Could not fetch database server info, status {status}){RESET}")
+
+def cleanup_user(user_id, headers):
+    print(f"10. Cleaning up: Removing test user ID '{user_id}'... ", end="", flush=True)
+    url = f"{KEYCLOAK_URL}/admin/realms/{REALM}/users/{user_id}"
+    status, _ = api_request(url, method="DELETE", headers=headers)
+    if status == 204:
+        print(f"{GREEN}SUCCESS (Workspace clean){RESET}")
+    else:
+        print(f"{YELLOW}WARNING (Failed to remove user, status {status}){RESET}")
 
 def main():
     print("=== Starting Full Docker / Keycloak Infrastructure Health Check ===")
@@ -160,10 +188,19 @@ def main():
     
     check_realm(headers)
     check_client(headers)
-    manage_user(headers)
-    test_user_auth()
-    check_database_status(headers)
     
+    created_user_id = None
+    was_created_by_script = False
+    
+    try:
+        created_user_id, was_created_by_script = manage_user(headers)
+        user_token = test_user_auth()
+        decode_and_print_token(user_token)
+        check_database_status(headers)
+    finally:
+        if created_user_id and was_created_by_script:
+            cleanup_user(created_user_id, headers)
+            
     print("=== All configuration health checks completed successfully! ===")
 
 if __name__ == "__main__":
