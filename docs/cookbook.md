@@ -32,3 +32,11 @@ email:       biba_user@example.com
 first name:  biba_first_name
 second name: biba_second_name
 ```
+
+API:
+
+```
+http://127.0.0.1:80/gateway_test
+
+http://127.0.0.1:80/api/health
+```
