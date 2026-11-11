@@ -1,12 +1,21 @@
 # Cookbook
 
-```
+```bash
 docker compose up --build -d
 docker compose down
 ```
 
-Reload nginx config (run in nginx container):
+If error while compiling container for developing in VSCode:
+```PowerShell
+[Environment]::SetEnvironmentVariable(
+    "BUILDX_BAKE_ENTITLEMENTS_FS",
+    "0",
+    "User"
+)
 ```
+
+Reload nginx config (run in nginx container):
+```bash
 nginx -s realod
 ```
 
