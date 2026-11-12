@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::telemetry;
 
+#[derive(Debug)] 
 pub struct ServerConfig {
     pub listen_address: String,
 }
@@ -12,8 +13,6 @@ pub struct AppState {
 }
 
 pub async fn run_server(config: ServerConfig) {
-    tracing::info!("Initial loading keys from Keycloak...");
-
     let shared_state = Arc::new(AppState { config });
 
     let app = Router::new()
@@ -24,6 +23,7 @@ pub async fn run_server(config: ServerConfig) {
     let listener = tokio::net::TcpListener::bind(shared_state.config.listen_address.clone())
         .await
         .unwrap();
+
     tracing::info!("Started on {}", shared_state.config.listen_address.clone());
     axum::serve(listener, app).await.unwrap();
 }
