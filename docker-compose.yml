@@ -12,6 +12,7 @@ services:
       - internal_network
     depends_on:
       - keycloak
+      - backend
 
   keycloak_db:
     image: postgres:16-alpine
@@ -49,6 +50,24 @@ services:
       - keycloak_db
     volumes:
       - ./keycloak:/opt/keycloak/data/import:ro
+
+  backend:
+    build:
+      context: ./backend
+      # dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.dev
+
+    container_name: backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    networks:
+      - internal_network
+    # depends_on:
+    #   keycloak:
+    #     condition: service_healthy
 
 networks:
   internal_network:
