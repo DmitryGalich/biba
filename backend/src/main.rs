@@ -23,7 +23,7 @@ async fn main() {
 
     let config = ServerConfig::from_env();
 
-    tracing::info!("Config loaded");
+    tracing::info!(?config, "Config loaded");
 
     server::run_server(config).await;
 }

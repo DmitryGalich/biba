@@ -7,12 +7,10 @@ use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{field::MakeExt, layer::SubscriberExt, util::SubscriberInitExt};
 
-/// Инициализирует глобальный логгер (консоль + файл) и перехватчик паник.
 pub fn init_tracing() -> io::Result<WorkerGuard> {
     let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "logs".to_string());
     let log_file = env::var("LOG_FILE").unwrap_or_else(|_| "app.log".to_string());
 
-    // Важно: добавляем tower_http=info, чтобы видеть логи входящих HTTP-запросов
     let default_filter = "rust_backend=info,axum=info,tower_http=info";
 
     fs::create_dir_all(&log_dir)?;
@@ -49,7 +47,6 @@ pub fn init_tracing() -> io::Result<WorkerGuard> {
     Ok(guard)
 }
 
-/// Создает слой middleware для логирования всех входящих HTTP-запросов и ответов.
 pub fn http_trace_layer(
 ) -> TraceLayer<SharedClassifier<ServerErrorsAsFailures>, DefaultMakeSpan, (), DefaultOnResponse> {
     TraceLayer::new_for_http()
