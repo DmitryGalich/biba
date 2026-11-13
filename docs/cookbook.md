@@ -19,6 +19,11 @@ Reload nginx config (run in nginx container):
 nginx -s realod
 ```
 
+Print nginx config:
+```bash
+nginx -T
+```
+
 Credentials:
 ```
 keycloak:    admin / admin_password
