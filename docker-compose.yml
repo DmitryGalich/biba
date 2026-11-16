@@ -42,6 +42,8 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin_password
 
       KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME: http://localhost/auth
+
       KC_PROXY_HEADERS: xforwarded
       KC_HOSTNAME_STRICT: "false"
     networks:
