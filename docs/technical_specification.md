@@ -3,96 +3,116 @@
 ## 1. General Information
 
 ### 1.1. System Name
-System Name: **Local On-Premise Information Retrieval RAG System (Retrieval-Augmented Generation)**.
+**Local On-Premise Information Retrieval RAG System (Retrieval-Augmented Generation)**
 
 ### 1.2. Project Goal
-Development of a fully isolated, secure, and fault-tolerant software system for annotating, indexing, and intelligently searching local documents using Large Language Models (LLMs) on self-hosted hardware (On-Premise).
+Development of a fully isolated, high-performance, and fault-tolerant software system for indexing and intelligently searching local documents using Large Language Models (LLMs) on consumer-grade self-hosted hardware (NVIDIA RTX 3060, 6 GB VRAM).
 
 ### 1.3. Key Objectives
-* Isolate corporate data from external cloud providers.
-* Enforce granular user access control to documents and chats via OAuth2/OIDC.
-* Ensure high-speed response generation and context retrieval leveraging GPU acceleration (NVIDIA CUDA).
+* Completely isolate data processing from external cloud providers.
+* Maximize hardware efficiency to fit both Embedding and Generative models strictly within a **6 GB VRAM budget** without CPU offloading.
+* Ensure low-latency response generation and context retrieval leveraging GPU acceleration (NVIDIA CUDA), gRPC, and real-time token streaming.
+
+---
 
 ## 2. Architecture and Technology Stack
 
-The system is built on a microservices architecture deployed via Docker Compose.
+The system is built on a microservices architecture deployed via Docker Compose within an isolated internal network.
 
 ### 2.1. Technology Stack
-* **Reverse Proxy (API Gateway):** Nginx 1.27.
-* **Authentication & Authorization:** Keycloak 26.3 + PostgreSQL 16 (as Keycloak metadata database).
-* **Backend Orchestrator:** Rust (recommended web frameworks: `Axum` or `Actix-web`).
-* **Vector Database:** Qdrant (latest stable release).
-* **LLM Runtime Environment:** Ollama Docker with NVIDIA Container Toolkit (CUDA) support.
+* **Reverse Proxy (API Gateway):** Nginx 1.27 (configured with disabled proxy buffering for Server-Sent Events).
+* **Backend Orchestrator:** Rust (`Axum` web framework, `Tokio` async runtime).
+* **Relational Database:** PostgreSQL 16 + `sqlx` (for storing chat sessions, message history, and document processing statuses).
+* **Vector Database:** Qdrant (latest stable release) using **gRPC** protocol (`qdrant-client`) and **Int8 Scalar Quantization**.
+* **LLM Runtime Environment:** Ollama Docker with NVIDIA Container Toolkit (CUDA), **Flash Attention**, and **8-bit KV-Cache quantization**.
 
-## 3. Functional Requirements
+---
 
-The system is divided into 3 core functional submodules.
+## 3. Hardware & Performance Optimization Requirements
 
-### 3.1. Identity and Access Management (IAM) Subsystem
-* **System Authentication:** Users gain access to the API/UI only after successful authorization via Keycloak.
-* **Token Management:** The client transmits the token in the `Authorization: Bearer <JWT>` header.
-* **Backend Validation:** The backend (Rust) must validate incoming JWT tokens on the fly (signature, expiration) utilizing open keys from Keycloak (`JWKS`).
-* **Role-Based Access Control (RBAC):** Users must be divided into at least two roles:
-  * `User`: Can chat, create custom dialogue sessions, and read documents they have explicit access to.
-  * `Admin`: Can upload new documents, delete files, and view system metrics.
+To prevent Out-Of-Memory (OOM) errors and ensure high inference speed on a 6 GB GPU:
 
-### 3.2. Document Indexing Subsystem (Data Ingestion Pipeline)
-* **Supported File Formats:** `.txt`, `.pdf`, `.docx`, and `.md`.
+1. **Model Quantization:** Use 4-bit GGUF quantized models (`Q4_K_M` format) to reduce VRAM footprint by ~70% with negligible quality loss.
+2. **KV-Cache & Attention Optimization:** Enable `OLLAMA_FLASH_ATTENTION=1` and `OLLAMA_KV_CACHE_TYPE=q8_0` in Ollama to save up to 1.5 GB of VRAM during long-context processing.
+3. **Context Window Cap:** Strictly limit the LLM context window to `num_ctx: 4096` tokens per request.
+4. **Vector Quantization:** Enable `ScalarQuantization (Int8)` in Qdrant collections to reduce RAM usage by 4x and accelerate vector similarity search.
+5. **Batched Inference:** Process document chunk embeddings in batches (e.g., 32 chunks per HTTP request) rather than sequential single-chunk requests.
+
+---
+
+## 4. Functional Requirements
+
+The system is divided into 2 core functional submodules (no authentication layer required).
+
+### 4.1. Document Indexing Subsystem (Data Ingestion Pipeline)
+* **Supported File Formats:** `.txt`, `.md`, `.pdf`, and `.docx`.
+* **Asynchronous Background Queue:** File uploads must immediately return a `202 Accepted` status with a `document_id`, pushing the heavy parsing/embedding workload into an internal `tokio::sync::mpsc` worker queue.
 * **Data Ingestion Pipeline:**
-  1. Extract raw text from the uploaded file.
-  2. Sanitize text by removing junk characters and format noise.
-  3. **Text Splitting (Chunking):** Split text into semantic fragments (chunks) of up to 500-1000 tokens/characters with a 10-20% overlap to preserve context at fragment boundaries.
-  4. **Embedding Generation:** Send each chunk to Ollama to generate vector embeddings (recommended models: `nomic-embed-text` or `bge-m3`).
-  5. **Vector Storage:** Insert the generated vector, original chunk text, and metadata (filename, document ID, creator ID) into the Qdrant database.
+  1. Extract raw text from the uploaded file (`pdf-extract` for PDF, `zip` + `quick-xml` for DOCX).
+  2. Sanitize text by removing junk characters and excessive whitespace.
+  3. **Semantic Chunking:** Split text using `text-splitter` (`MarkdownSplitter` / `TextSplitter`) into fragments of up to **600 characters** with a **100-character overlap** (~15%) to preserve context across boundaries.
+  4. **Batched Embedding Generation:** Send chunks in batches to Ollama using the lightweight **`nomic-embed-text`** model (~270 MB VRAM, 768 dimensions).
+  5. **Vector Storage:** Upsert vectors, original chunk text, and metadata (`document_id`, `filename`, `chunk_index`) into Qdrant via gRPC, then update the document status to `ready` in PostgreSQL.
 
-### 3.3. Chat and Response Generation Subsystem (RAG Pipeline)
-* **Dialogue Session Management:** Ability to create, rename, and delete chat sessions (message history persists in a database).
+### 4.2. Chat and Response Generation Subsystem (RAG Pipeline)
+* **Dialogue Session Management:** Create, list, rename, and delete chat sessions. All user prompts and assistant responses are persisted in PostgreSQL.
 * **Context Retrieval:**
-  1. Upon receiving a new user prompt, the backend vectorizes it via Ollama's embedding model.
-  2. The backend performs a Cosine Similarity nearest-neighbor search in Qdrant, requesting the `Top-K` (e.g., 3-5) most relevant text chunks.
+  1. Vectorize the incoming user query via Ollama (`nomic-embed-text`).
+  2. Perform a Cosine Similarity search in Qdrant via gRPC, requesting `Top-K` (default: 4) chunks with a minimum similarity threshold (`score_threshold >= 0.65`) to filter out irrelevant noise.
+  3. *Fallback:* If no chunks pass the threshold, return a predefined message stating that the answer is not found in the knowledge base without invoking the LLM.
 * **Response Generation:**
-  1. Construct an augmented prompt (System Prompt + Context from Qdrant + Chat History + User Prompt).
-  2. Dispatch the prompt to Ollama's generative model (recommended: `llama3.1:8b`, `mistral:7b`, or `qwen2.5:7b`).
-  3. **Token Streaming:** The response from Ollama must stream to the user in real time using **Server-Sent Events (SSE)** or WebSockets via the Rust backend.
+  1. Construct an augmented prompt: `System Prompt (strict grounding rules) + Retrieved Context + Recent Chat History + User Query`.
+  2. Dispatch the prompt to Ollama's generative model (**`qwen2.5:7b-instruct-q4_K_M`**, ~4.7 GB VRAM) with `temperature: 0.1` and `num_ctx: 4096`.
+  3. **Token Streaming:** Stream generated tokens in real time to the client via **Server-Sent Events (`text/event-stream`)** through Rust/Axum and Nginx.
 
-## 4. REST API Specification (Target Endpoints)
+---
 
-All endpoints, except `/api/v1/health`, require an `Authorization: Bearer <JWT>` header.
+## 5. REST API Specification (Target Endpoints)
 
-### 4.1. General
-* `GET /api/v1/health` — Backend health check (verifies connections to Ollama, Qdrant, and DB).
+All endpoints are open within the local network (no `Authorization` headers required).
 
-### 4.2. Document Management (Admin Access Only)
-* `POST /api/v1/documents/upload` — File upload (`multipart/form-data`). Returns document ID and processing queue status.
-* `GET /api/v1/documents` — Fetch a list of all indexed documents.
-* `DELETE /api/v1/documents/{id}` — Delete a document from the system and purge corresponding vector points from Qdrant.
+### 5.1. System & Health
+* `GET /api/v1/health` — System health check (verifies active connections to PostgreSQL, Qdrant gRPC, and Ollama API).
 
-### 4.3. Chat and RAG Management (User / Admin Access)
-* `POST /api/v1/chats` — Initialize a new dialogue session.
-* `GET /api/v1/chats` — Fetch a list of chat sessions belonging to the current user.
-* `GET /api/v1/chats/{id}/history` — Load message history for a specific chat.
+### 5.2. Document Management
+* `POST /api/v1/documents/upload` — Upload a file (`multipart/form-data`). Saves metadata to PostgreSQL (`status: processing`), queues the background indexing task, and returns `202 Accepted`.
+* `GET /api/v1/documents` — Fetch a list of all documents and their indexing statuses from PostgreSQL.
+* `DELETE /api/v1/documents/{id}` — Delete a document record from PostgreSQL and purge all associated vector points from Qdrant by payload filter.
+
+### 5.3. Chat and RAG Management
+* `POST /api/v1/chats` — Initialize a new dialogue session in PostgreSQL.
+* `GET /api/v1/chats` — Fetch a list of all chat sessions.
+* `GET /api/v1/chats/{id}/history` — Load message history for a specific chat session.
+* `DELETE /api/v1/chats/{id}` — Delete a chat session and its message history.
 * `POST /api/v1/chats/{id}/message` — Submit a new query.
-  * *Parameters:* `stream: true/false`.
-  * *Response:* Standard JSON payload or text stream (`text/event-stream`).
+  * *Payload:* `{ "query": "string", "stream": true }`
+  * *Response:* Real-time `text/event-stream` (SSE) or JSON response.
 
-## 5. Non-Functional Requirements
+---
 
-### 5.1. Security and Data Isolation
-* **Network Isolation:** All services, except `gateway`, must reside within an isolated docker network (`internal_network`) and must not expose ports to the host machine.
-* **Input Validation:** Mitigate Prompt Injection attacks by sanitizing and separating user queries from the injected context block in system instructions.
-* **Data Sanitization:** When a user or document is deleted, the data must be completely erased from Qdrant vector spaces.
+## 6. Non-Functional Requirements
 
-### 5.2. Performance and Scalability
-* **Asynchronous Design:** The Rust backend must leverage non-blocking I/O (`tokio`) to efficiently manage hundreds of concurrent SSE connections.
-* **Latency Limits:** Vector search latency in Qdrant must remain below 100 ms. Time to First Token (TTFT) from Ollama must not exceed 2 seconds on GPU-accelerated hardware.
-* **Task Queues:** File ingestion must be handled via a background queue (e.g., using `tokio::sync::mpsc`) so that large file uploads do not block chat generation requests.
+### 6.1. Network & Data Isolation
+* **Container Isolation:** Only the `gateway` (Nginx) container exposes port `80` to the host machine. PostgreSQL, Qdrant, Ollama, and Rust Backend communicate strictly over the internal Docker bridge network (`internal_network`).
+* **Prompt Injection Mitigation:** Clearly delimit user input from system instructions and retrieved context blocks using XML tags (e.g., `<context>...</context>`, `<user_query>...</user_query>`).
 
-### 5.3. Fault Tolerance
-* Automatic container recovery on failure (`restart: unless-stopped`).
-* Isolated logging configurations for Nginx, Keycloak, and the Rust backend, mapped to host directories for persistence.
+### 6.2. Performance & Resource Budgets
+* **GPU Utilization:** 100% of model layers must reside in GPU VRAM (`ollama ps` must show `100% GPU`).
+* **Latency Targets:**
+  * Qdrant gRPC vector search: **< 20 ms**.
+  * Time to First Token (TTFT) on warm model: **< 1.5 seconds**.
+  * Generation speed: **25–35+ tokens/sec**.
+* **Connection Lifecycle:** Properly handle client disconnects during SSE streaming in Tokio to immediately abort ongoing Ollama generation and free GPU compute.
 
-## 6. Acceptance Criteria
-1. The full application stack boots successfully with a single command: `docker-compose up -d`.
-2. Unauthorized requests to `/api/` are rejected with a `401 Unauthorized` status code by Nginx or the Rust backend.
-3. Uploaded documents are properly chunked, indexed, and leveraged by the LLM to answer contextual user queries.
-4. Response token generation utilizes real-time streaming (SSE) instead of waiting for full generation cycles.
+### 6.3. Fault Tolerance & Observability
+* Automatic container restarts (`restart: unless-stopped`).
+* Structured telemetry in Rust (`tracing` + `tracing-subscriber`) logging execution time for each pipeline stage (parsing, embedding, Qdrant search, LLM TTFT).
+
+---
+
+## 7. Acceptance Criteria
+
+1. The entire stack (`gateway`, `backend`, `postgres`, `qdrant`, `ollama`) launches cleanly with a single command: `docker compose up -d`.
+2. `ollama ps` confirms both `qwen2.5:7b-instruct-q4_K_M` and `nomic-embed-text` run at `100% GPU` without exceeding 6 GB VRAM.
+3. Uploaded `.txt`, `.md`, `.pdf`, and `.docx` files are processed asynchronously in the background without blocking concurrent chat requests.
+4. Chat queries retrieve accurate context from Qdrant and stream tokens smoothly to the client via Nginx without buffering delays.
