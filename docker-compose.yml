@@ -10,23 +10,46 @@ services:
     restart: unless-stopped
     networks:
       - internal_network
-    depends_on:
-      - backend
+    # depends_on:
+    #   - backend
 
-  backend:
-    build:
-      context: ./backend
-      # dockerfile: Dockerfile.prod
-      dockerfile: Dockerfile.dev
+  # backend:
+  #   build:
+  #     context: ./backend
+  #     # dockerfile: Dockerfile.prod
+  #     dockerfile: Dockerfile.dev
 
-    container_name: backend
+  #   container_name: backend
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./backend/.env
+  #   ports:
+  #     - "8000:8000"
+  #   networks:
+  #     - internal_network
+
+  ollama:
+    image: ollama/ollama:0.5.7
+    container_name: ollama
     restart: unless-stopped
-    env_file:
-      - ./backend/.env
-    ports:
-      - "8000:8000"
+    gpus: all
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KV_CACHE_TYPE=q8_0
+      - OLLAMA_MAX_LOADED_MODELS=2
+      - OLLAMA_KEEP_ALIVE=-1
+      - OLLAMA_NUM_PARALLEL=1
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     networks:
       - internal_network
 
+
+
 networks:
   internal_network:
+
+volumes:
+  ollama_data:
